@@ -278,6 +278,10 @@ static SECItem* make_initialization_vector( CK_MECHANISM_TYPE cipher_mech, int b
 static SECItem* make_salt( int bytes )
 {
 	SECItem* salt_item = SECITEM_AllocItem( NULL, NULL, bytes );
+	if( !salt_item ) {
+		return NULL;
+	}
+	
 	SECStatus rv = PK11_GenerateRandom( salt_item->data, salt_item->len );
 	if( SECSuccess != rv ) {
 		SECITEM_FreeItem( salt_item, PR_TRUE );
@@ -488,12 +492,20 @@ privly_CreatePostKey( void* session, privly_postid_t post_id,
 cleanup:
 	if( slot ) {
 		PK11_FreeSlot( slot );
-		slot = NULL;
 	}
 	
-	if( PRIVLY_CRYPTO_SUCCESS != rv && key ) {
-		PK11_FreeSymKey( key );
-		key = NULL;
+	if( PRIVLY_CRYPTO_SUCCESS != rv ) {
+		if( post_data ) {
+			PostData_Free( post_data ); /* This frees everything */
+		}
+		else {
+			if( key ) {
+				PK11_FreeSymKey( key );
+			}
+			if( iv_param ) {
+				SECITEM_FreeItem( iv_param, PR_TRUE );
+			}
+		}
 	}
 	
 	return rv;
@@ -582,14 +594,19 @@ cleanup:
 		PK11_FreeSlot( slot );
 	}
 	if( PRIVLY_CRYPTO_SUCCESS != rv ) {
-		if( key ) {
-			PK11_FreeSymKey( key );
+		if( post_data ) {
+			PostData_Free( post_data ); /* This frees everything */
 		}
-		if( salt ) {
-			SECITEM_FreeItem( salt, PR_TRUE );
-		}
-		if( iv_param ) {
-			SECITEM_FreeItem( iv_param, PR_TRUE );
+		else {
+			if( key ) {
+				PK11_FreeSymKey( key );
+			}
+			if( salt ) {
+				SECITEM_FreeItem( salt, PR_TRUE );
+			}
+			if( iv_param ) {
+				SECITEM_FreeItem( iv_param, PR_TRUE );
+			}
 		}
 	}
 	
@@ -664,8 +681,6 @@ privly_ExportPostKey( void* session, privly_postid_t post_id,
 {
 	int rv = PRIVLY_CRYPTO_SUCCESS;
 	SECStatus status = SECSuccess;
-	PK11SymKey* wrapper_key = NULL;
-	SECItem* iv_param = NULL;
 	SECItem* wrapped_key = NULL;
 	int b_common_enq = 0;
 	struct Session* typed_session = (struct Session*) session;
@@ -702,7 +717,7 @@ privly_ExportPostKey( void* session, privly_postid_t post_id,
 		/* Copy output data */
 		memcpy( data->iv, post_data->iv_param->data, post_data->iv_param->len );
 		memcpy( data->kdf_salt, post_data->salt_item->data, post_data->salt_item->len );
-	}
+	} /* PRIVLY_CRYPTO_POSTKEY_DERIVED */
 	else if( PRIVLY_CRYPTO_POSTKEY_WITH_PUBLIC_KEY == post_data->type ) {
 		/* Export the post key protected by a user's public key. */
 		
@@ -716,12 +731,12 @@ privly_ExportPostKey( void* session, privly_postid_t post_id,
 		cert = PK11_FindCertFromNickname( "TestCA", session );
 		if( !cert ) {
 			rv = PRIVLY_CRYPTO_NO_SUCH_CERTIFICATE;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		public_key = CERT_ExtractPublicKey( cert );
 		if( !public_key ) {
 			rv = PRIVLY_CRYPTO_NO_PUBLIC_KEY;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		
 		/* Figure out how big the exported key will be */
@@ -729,42 +744,32 @@ privly_ExportPostKey( void* session, privly_postid_t post_id,
 		data->key_data_len = key_size;
 		if( b_common_enq || !data->key_data ) {
 			rv = PRIVLY_CRYPTO_ENQ;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		wrapped_key = SECITEM_AllocItem( NULL, NULL, key_size );
 		if( !wrapped_key ) {
 			rv = PRIVLY_CRYPTO_OUT_OF_MEMORY;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		
 		/* Do wrapping */
 		status = PK11_PubWrapSymKey( CKM_RSA_PKCS, public_key, post_data->key, wrapped_key );
 		if( SECSuccess != rv ) {
 			rv = PRIVLY_CRYPTO_PK_WRAP_FAIL;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		
 		/* Copy output data */
 		memcpy( data->key_data, wrapped_key->data, wrapped_key->len );
 		memcpy( data->iv, post_data->iv_param->data, post_data->iv_param->len );
-		
-public_key_cleanup:
-		if( cert ) {
-			CERT_DestroyCertificate( cert );
-		}
-		if( public_key ) {
-			SECKEY_DestroyPublicKey( public_key );
-		}
-		
-		goto cleanup;
-	}
+	} /* PRIVLY_CRYPTO_POSTKEY_WITH_PUBLIC_KEY */
 	
 cleanup:
-	if( wrapper_key ) {
-		PK11_FreeSymKey( wrapper_key );
+	if( cert ) {
+		CERT_DestroyCertificate( cert );
 	}
-	if( iv_param ) {
-		SECITEM_FreeItem( iv_param, PR_TRUE );
+	if( public_key ) {
+		SECKEY_DestroyPublicKey( public_key );
 	}
 	if( wrapped_key ) {
 		SECITEM_FreeItem( wrapped_key, PR_TRUE );
@@ -819,14 +824,14 @@ privly_ImportPostKey( void* session, privly_postid_t post_id,
 	if( PRIVLY_CRYPTO_POSTKEY_DERIVED == data->type ) {
 		if( data->kdf_iterations == 0 || !data->kdf_salt ) {
 			rv = PRIVLY_CRYPTO_BAD_PARAM;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		
 		/* Extract SECItem for salt. */
 		salt = SECITEM_AllocItem( NULL, NULL, data->kdf_salt_len );
 		if( !salt ) {
 			rv = PRIVLY_CRYPTO_OUT_OF_MEMORY;
-			goto derived_cleanup;
+			goto cleanup;
 		}
 		memcpy( salt->data, data->kdf_salt, data->kdf_salt_len );
 		
@@ -834,14 +839,14 @@ privly_ImportPostKey( void* session, privly_postid_t post_id,
 		status = hash_passphrase( passphrase, passphrase_hash );
 		if( SECSuccess != status ) {
 			rv = PRIVLY_CRYPTO_LIBRARY_ERROR;
-			goto derived_cleanup;
+			goto cleanup;
 		}
 		
 		/* Derive the post key */
 		rv = derive_key( session, passphrase_hash, data->kdf_iterations, salt, &post_key );
 		if( PRIVLY_CRYPTO_SUCCESS != rv ) {
 			rv = PRIVLY_CRYPTO_KDF_FAIL;
-			goto derived_cleanup;
+			goto cleanup;
 		}
 		
 		/* Store the key in 'session'. */
@@ -855,26 +860,18 @@ privly_ImportPostKey( void* session, privly_postid_t post_id,
 		
 		rv = Session_SetPostData( typed_session, post_id, post_data );
 		
-derived_cleanup:
-		if( PRIVLY_CRYPTO_SUCCESS != rv ) {
-			if( salt ) {
-				SECITEM_FreeItem( salt, PR_TRUE );
-			}
-		}
-		
-		goto cleanup;
 	} /* PRIVLY_CRYPTO_POSTKEY_DERIVED */
 	else {
 		if( !data->key_data ) {
 			rv = PRIVLY_CRYPTO_BAD_PARAM;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		
 		/* Wrapped key data */
 		key_item = SECITEM_AllocItem( NULL, NULL, data->key_data_len );
 		if( !key_item ) {
 			rv = PRIVLY_CRYPTO_OUT_OF_MEMORY;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		memcpy( key_item->data, data->key_data, data->key_data_len );
 		
@@ -896,7 +893,7 @@ derived_cleanup:
 			private_key, key_item, cipher_mech, CKA_UNWRAP, data->key_bits / 8 );
 		if( !post_key ) {
 			rv = PRIVLY_CRYPTO_PK_UNWRAP_FAIL;
-			goto public_key_cleanup;
+			goto cleanup;
 		}
 		
 		/* Store the key in 'session'. */
@@ -909,28 +906,34 @@ derived_cleanup:
 		}
 		
 		rv = Session_SetPostData( typed_session, post_id, post_data );
-	
-public_key_cleanup:
-		if( cert ) {
-			CERT_DestroyCertificate( cert );
-		}
-		if( private_key ) {
-			SECKEY_DestroyPrivateKey( private_key );
-		}
-		if( key_item ) {
-			SECITEM_FreeItem( key_item, PR_TRUE );
-		}
 		
-		goto cleanup;
 	} /* PRIVLY_CRYPTO_POSTKEY_WITH_PUBLIC_KEY */
 	
 cleanup:
+	if( key_item ) {
+		SECITEM_FreeItem( key_item, PR_TRUE );
+	}
+	if( cert ) {
+		CERT_DestroyCertificate( cert );
+	}
+	if( private_key ) {
+		SECKEY_DestroyPrivateKey( private_key );
+	}
+	
 	if( PRIVLY_CRYPTO_SUCCESS != rv ) {
-		if( iv_param ) {
-			SECITEM_FreeItem( iv_param, PR_TRUE );
+		if( post_data ) {
+			PostData_Free( post_data );
 		}
-		if( post_key ) {
-			PK11_FreeSymKey( post_key );
+		else {
+			if( iv_param ) {
+				SECITEM_FreeItem( iv_param, PR_TRUE );
+			}
+			if( salt ) {
+				SECITEM_FreeItem( salt, PR_TRUE );
+			}
+			if( post_key ) {
+				PK11_FreeSymKey( post_key );
+			}
 		}
 	}
 	
