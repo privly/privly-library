@@ -277,13 +277,14 @@ static SECItem* make_initialization_vector( CK_MECHANISM_TYPE cipher_mech, int b
  */
 static SECItem* make_salt( int bytes )
 {
+	SECStatus status = SECSuccess;
 	SECItem* salt_item = SECITEM_AllocItem( NULL, NULL, bytes );
 	if( !salt_item ) {
 		return NULL;
 	}
 	
-	SECStatus rv = PK11_GenerateRandom( salt_item->data, salt_item->len );
-	if( SECSuccess != rv ) {
+	status = PK11_GenerateRandom( salt_item->data, salt_item->len );
+	if( SECSuccess != status ) {
 		SECITEM_FreeItem( salt_item, PR_TRUE );
 		return NULL;
 	}
