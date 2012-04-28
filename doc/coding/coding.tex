@@ -1,0 +1,208 @@
+\documentclass[]{article}
+
+\usepackage{amsmath}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{subfig}
+\usepackage{fullpage}
+
+\setcounter{secnumdepth}{4}
+
+
+\title{Guidelines for Privly Security Components}
+
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+This document sets out guidelines for creating and maintaining security-related components for Privly. 
+
+\section{Coding Standards}
+This section describes guidelines for developers working on the Privly security library.
+
+\subsection{Language}
+The Privly security library is implemented in ANSI C. Developers must not use any compiler- or platform-specific extensions.
+
+% ----------------------------------------------------------------------------
+
+\subsection{Naming conventions}
+\subsubsection{Namespaces} All identifiers declared in a header file begin with \verb'privly_'. This string is considered part of the \emph{namespace} of the identifier, and not part of the identifier's name.
+
+\textbf{Rationale:} Prevent naming collisions with other libraries
+
+\subsubsection{Public APIs} All functions and data structures intended for use by clients have names beginning with a capital letter.
+
+\textbf{Example:} \verb'privly_EncryptPost()'
+
+\textbf{Rationale:} Distinguish public APIs from internal APIs.
+
+% ----------------------------------------------------------------------------
+
+\subsection{Header files}
+\subsubsection{File extension}
+Headers intended for use from C code have the \verb'.h' extension. 
+
+\subsubsection{Boilerplate}
+Headers intended for use from C code must conform to this general template:
+
+\begin{quote} \begin{verbatim}
+#ifndef PRIVLY_<additional-namespaces>_<filename>_H_
+#define PRIVLY_<additional-namespaces>_<filename>_H_
+
+<#include directives>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+<code>
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PRIVLY_<additional-namespaces>_<filename>_H_ */
+\end{verbatim} \end{quote}
+
+% ----------------------------------------------------------------------------
+
+\subsection{Implementation files}
+\subsubsection{File extension}
+Implementation files written in C have the \verb'.c' extension.
+
+\subsubsection{Names}
+Implementation files that implement an interface described in a header file have the same file name as the header file.
+
+\subsubsection{Header-Implementation correspondence}
+All functions declared in a given header file should be implemented in the corresponding implementation file. Implementations should not be spread across multiple files.
+
+\textbf{Rationale:} Makes function definitions easy to locate. 
+
+\subsubsection{Local functions}
+Any functions used in the implementation file that are not declared in the header file must be marked \verb'static'.
+
+\subsubsection{No static data}
+Implementation files must not contain any static data. All necessary state data must be encapsulated in an object that is passed to functions as needed.
+
+\textbf{Rationale:} Functions that rely on static data may return different values when given the same arguments, depending on the state of the static data. Since this state is not directly visible, it can be difficult for programmers to predict what a function will do in a given context. Static data also makes correct multithreading nearly impossible.
+
+% ----------------------------------------------------------------------------
+
+\subsection{Errors}
+Error handling is done via \emph{return codes}. 
+
+\subsubsection{Reporting errors}
+All functions that can fail must indicate failure by their return value.
+
+\paragraph{Returning NULL}
+Functions may indicate failure by returning \verb'NULL' if the likely reason for the failure is obvious.
+
+\textbf{Example:} A function that allocates memory may indicate failure by returning \verb'NULL', since the failure is almost always due to lack of memory.
+
+\paragraph{Returning an integer}
+Functions that can fail in several ways must return an integer error code identifying the error. Integer return codes must be given names with a \verb'#define' statement. 
+
+\subsubsection{Error checking}
+All return values must be checked for all functions, including standard library functions and memory allocation functions.
+
+\subsubsection{Argument checking}
+All functions must check their arguments for validity, and report errors as appropriate. Functions must not assume that the caller supplied correct parameters if doing so could cause the function to fail un-gracefully.
+
+\subsubsection{Transactions}
+All functions must use the ``transactional'' paradigm: either the function succeeds completely, or it makes no visible changes to the program state.
+
+\textbf{Example:}
+\begin{quote} \begin{verbatim}
+int privly_AddUser( char const* new_name, list_of_users* names )
+{
+    int rv = 0;
+    struct some_user_data* data = NULL;
+    
+    /* Make sure all preparations succeed. */
+    if( name_exists( names, new_name ) ) {
+        return NAME_EXISTS_ERROR;
+    }
+    data = (struct some_user_data*) malloc( sizeof( struct some_user_data ) );
+    if( !data ) {
+        return OUT_OF_MEMORY_ERROR;
+    }
+    
+    /* Preparations succeeded. OK to make state changes now. */
+    rv = add_user( new_name, names );
+    if( SUCCESS != rv ) {
+        free( data );
+    }
+    return rv;
+}
+\end{verbatim} \end{quote}
+
+\textbf{Rationale:} The system must remain in a consistent state regardless of errors.
+
+% ----------------------------------------------------------------------------
+
+\subsection{Security}
+
+\subsubsection{No original implementations}
+The Privly library does not implement any low-level cryptographic routines. Developers must not write their own code to perform cryptography tasks such as: encryption, key generation, random number generation. Use the appropriate functions in the chosen cryptographic library instead.
+
+\textbf{Rationale:} Most developers do not know how to write correct and robust implementations of cryptographic algorithms. Very small implementation errors can result in completely insecure implementations. JUST SAY NO!
+
+\subsubsection{Random numbers}
+Random numbers intended for cryptographic use must be generated using a cryptographic PRNG. Do not use the standard library \verb'rand()' function, or any other PRNG not specifically designed for cryptographic use.
+
+\textbf{Rationale:} Cryptographic PRNGs are specially designed so that the internal state of the PRNG cannot be inferred by observing its output. Ordinary PRNGs are not designed in this way. If an attacker can learn the state of the PRNG, \emph{all} cryptographic algorithms that rely on the PRNG become compromised.
+
+\subsubsection{Key sizes}
+All symmetric keys must have at least 256 bits. All RSA keys must have at least 2048 bits.
+
+\textbf{Rationale:} Small keys are inherently weak, and become weaker over time as hardware becomes faster. Users should not be allowed to configure the system in a way that could compromise their security.
+
+\subsubsection{No ECB mode}
+Cryptographic block ciphers must not be used in ECB mode. In ECB mode, the data is split into blocks and each block is encrypted independently. ECB mode causes identical plaintext blocks to be encrypted to identical ciphertext blocks, which can reveal patterns in data.
+
+\subsubsection{Use CBC mode by default}
+Block ciphers should use CBC mode by default. In CBC mode, each block is XOR'd with the result of encrypting the previous block. This eliminates the problems of ECB mode.
+
+\subsubsection{Initialization vectors}
+Cipher algorithms operated in CBC mode (and in some other modes) require an \emph{initialization vector}. For example, in CBC mode, there is no previously-encrypted block to combine with the first plaintext block, so the initialization vector is used for this purpose. Initialization vectors must be randomly generated separately for every encryption key that requires them.
+
+\subsubsection{Secret versus non-secret data}
+\label{sec:secret}
+The following table describes which common pieces of data are secret, and which are non-secret. Secret data must not be made accessible in unencrypted form. Non-secret data may be made accessible as cleartext, but it should be stored in as few places as possible, and only for as long as needed. 
+
+\begin{tabular}{p{0.4\textwidth}|p{0.4\textwidth}}
+\textbf{Secret} & \textbf{Non-secret} \\
+\hline
+All symmetric keys, RSA private keys, passphrases, plaintext data & RSA public keys, passphrase hashes, initialization vectors, salts, key derivation function parameters, encrypted data
+\end{tabular}
+
+\subsubsection{Passphrases}
+\paragraph{Hashing}
+\label{sec:passphrases:hashing}
+Passphrases must be hashed before applying any other operations. It must \emph{not} be possible to skip the hash operation (e.g., by supplying a ``no hash'' flag to the function).
+
+\textbf{Rationale:} Immediately hashing plaintext passphrases allows us to treat all passphrases as a sequence of bytes of fixed length, which simplifies code that deals with passphrases and keeps us from forgetting to hash them later. The reason that the hash must not be skippable is that if it could be skipped, an attacker could successfully use a passphrase hash instead of a passphrase to gain access to data. Since passphrase hashes are non-secret (\ref{sec:secret}), this is unacceptable.
+
+\paragraph{Salts}
+\label{sec:passphrases:salts}
+A \emph{salt} is a random number that is combined with other data before performing a cryptographic operation. A random salt must be used whenever the passphrase is used for key derivation or any similar operation. A salt must also be used when hashing a password for persistent storage. 
+
+\textbf{Rationale:} The random salt prevents identical passphrases from yielding identical results. If a salt is not used, an attacker can discover that two different data items are protected by the same passphrase.
+
+\paragraph{Persistent storage}
+Passphrases that are to be stored on persistent media must be protected with the following operations:
+\begin{enumerate}
+\item The plaintext passphrase is immediately hashed (\ref{sec:passphrases:hashing})
+\item A random salt is generated and prepended to the hashed passphrase (\ref{sec:passphrases:salts})
+\item The salted passphrase hash is hashed again
+\end{enumerate}
+
+\textbf{Rationale:} As described in (\ref{sec:passphrases:salts}, the addition of a random salt makes dictionary attacks impractical.
+
+
+\end{document} 
+
+
+

@@ -1,0 +1,15 @@
+# ----------------------------------------------------------------------------
+# SConscript for building libraries from object files.
+#
+# TODO:
+#	[2012/04/23:jhostetler] This is only tested on Windows with MSVC 9.
+#
+# History:
+#	[2012/04/23:jhostetler] Created by translating the original Makefile.
+# ----------------------------------------------------------------------------
+
+Import( "env" )
+
+subdir = env["PLATFORM"]
+libs = env.SharedLibrary( subdir + "/privly", env["PRIVLY_OBJECT_LIST"] )
+Return( "libs" )

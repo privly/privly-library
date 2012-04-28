@@ -75,6 +75,9 @@ extern "C" {
 /** Failure in key derivation. */
 #define PRIVLY_CRYPTO_KDF_FAIL 				63
 
+/** A key pair with the given nickname already exists. */
+#define PRIVLY_CRYPTO_DUPLICATE_KEYPAIR		70
+
 /** Reserved post ID representing NULL. */
 #define PRIVLY_POSTID_NULL_POST 	(privly_postid_t) 0
 /** Minimum user-defined post ID. */
@@ -332,6 +335,9 @@ privly_DecryptPost( void* session, privly_postid_t post_id,
  */
 int PRIVLY_EXPORT
 privly_ForgetPostKey( void* session, privly_postid_t post_id );
+
+int PRIVLY_EXPORT
+privly_GenerateKeyPair( void* session, char const* nickname, int const key_bits );
 
 
 #ifdef __cplusplus

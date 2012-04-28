@@ -1,0 +1,60 @@
+# ----------------------------------------------------------------------------
+# SConscript for building objects from source files.
+#
+# TODO:
+#	[2012/04/23:jhostetler] This is only tested on Windows with MSVC 9.
+#
+# History:
+#	[2012/04/23:jhostetler] Created by translating the original Makefile.
+# ----------------------------------------------------------------------------
+
+Import( "env" )
+
+print( env["PRIVLY_CRYPTO_BACKEND"] )
+
+cppdefs = []
+if env["PLATFORM"] == "win32":
+	# __WIN3__ is a non-standard Windows platform identification macro that 
+	# libraries occasionally depend on.
+	# _SCL_SECURE_NO_WARNINGS : disable compiler warnings for using standard
+	#	library functions that "rely on the caller to ensure the arguments are
+	#	correct" (as though that's unusual!)
+	cppdefs += ["WIN32", "_WINDOWS", "__WIN32__", "WINNT", "XP_PC", "_SCL_SECURE_NO_WARNINGS"]
+if env["PRIVLY_DEBUG"]:
+	pass
+else: # Release build
+	cppdefs += ["NDEBUG"]
+
+# Common flags
+ccflags = []
+if env["PLATFORM"] == "win32":
+	#	-W4		Warning level 4/4
+	#	-nologo	Suppress startup banner
+	ccflags += ["-W4", "-nologo"]
+	
+	if env["PRIVLY_CRYPTO_BACKEND"] == "nss":
+		#	-GT		Consult NSS manual
+		ccflags += ["-GT"]
+
+# Debug-specific flags
+if env["PRIVLY_DEBUG"]:
+	if env["PLATFORM"] == "win32":
+		#	-Od		No optimizations
+		#	-MDd	C runtime library
+		ccflags += ["-Od", "-MDd"]
+else: # Release build
+	if env["PLATFORM"] == "win32":
+		#	-O2		Speed optimizations
+		#	-MD		C runtime library
+		ccflags += ["-O2", "-MD"]
+
+env.Append( CPPDEFINES = cppdefs + ["PRIVLY_NONCLIENT_BUILD"] )
+env.Append( CCFLAGS = ccflags )
+
+# ----------------------------------------------------------------------------
+# Build steps
+# ----------------------------------------------------------------------------
+
+obj_list = []
+obj_list.append( env.Object( "privly/nss_crypto.c" ) )
+Return( "obj_list" )

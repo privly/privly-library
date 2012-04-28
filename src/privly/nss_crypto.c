@@ -35,6 +35,7 @@
 /* TODO: These defaults need to be in the protocol spec. */
 #define privly_HASH_ALGORITHM 		HASH_AlgSHA512
 #define privly_HASH_LENGTH			SHA512_LENGTH
+#define privly_RSA_KEYGEN_PE		65537L
 
 /* NSS has no "invalid" CK_MECHANISM_TYPE; this one appears to be unused. */
 static CK_MECHANISM_TYPE const CKM_INVALID = (CK_MECHANISM_TYPE) -1; 
@@ -230,6 +231,8 @@ static SECStatus hash_passphrase( char const* passphrase, unsigned char* hashed 
 	return status;
 }
 
+/* -------------------------------------------------------------------------*/
+
 /**
  * Translates a Privly cipher algorithm ID to an NSS CK_MECHANISM_TYPE.
  *
@@ -244,6 +247,8 @@ static CK_MECHANISM_TYPE privly_cipher_to_ckm( enum privly_CipherAlgorithm algor
 		return CKM_INVALID;
 	}
 }
+
+/* -------------------------------------------------------------------------*/
 
 /**
  * Creates a random initialization vector of length 'bytes' for a cipher
@@ -272,6 +277,8 @@ static SECItem* make_initialization_vector( CK_MECHANISM_TYPE cipher_mech, int b
 	return sec_param;
 }
 
+/* -------------------------------------------------------------------------*/
+
 /**
  * Computes a random salt of length 'bytes' and stores it in an SECItem.
  */
@@ -291,6 +298,8 @@ static SECItem* make_salt( int bytes )
 	
 	return salt_item;
 }
+
+/* -------------------------------------------------------------------------*/
 
 /**
  * Derives a symmetric key from a passphrase hash and some KDF parameters.
@@ -344,6 +353,368 @@ cleanup:
 	
 	return rv;
 }
+
+/* -------------------------------------------------------------------------*/
+
+/**
+ * Looks up a private key in the database by nickname. If there is no such key
+ * in the database, the function returns PRIVLY_CRYPTO_SUCCESS but
+ * 'private_key' is set to NULL.
+ */
+int get_private_key( void* session, char const* nickname, SECKEYPrivateKey** private_key )
+{
+	int rv = PRIVLY_CRYPTO_SUCCESS;
+	PK11SlotInfo* slot = NULL;
+	SECKEYPrivateKeyList* private_key_list = NULL;
+	SECKEYPrivateKeyListNode* list_node = NULL;
+	char const* tmp_nickname = NULL;
+	
+	slot = PK11_GetInternalKeySlot(); /* TODO: GetBestSlot() */
+	if( !slot ) {
+		rv = PRIVLY_CRYPTO_LIBRARY_ERROR;
+		goto cleanup;
+	}
+	
+	private_key_list = PK11_ListPrivKeysInSlot( slot, nickname, session );
+	if( !private_key_list ) {
+		/* No key found. */
+		*private_key = NULL;
+		rv = PRIVLY_CRYPTO_SUCCESS;
+		goto cleanup;
+	}
+	
+	for( list_node = PRIVKEY_LIST_HEAD( private_key_list ); 
+		 !PRIVKEY_LIST_END( list_node, private_key_list ); 
+		 list_node = PRIVKEY_LIST_NEXT( list_node ) )
+	{
+		tmp_nickname = PK11_GetPrivateKeyNickname( list_node->key );
+		if( PL_strcmp( nickname, tmp_nickname ) == 0 ) {
+			break;
+		}
+	}
+	if( PRIVKEY_LIST_END( list_node, private_key_list ) ) {
+		/* No key found. */
+		*private_key = NULL;
+		rv = PRIVLY_CRYPTO_SUCCESS;
+		goto cleanup;
+	}
+	
+	*private_key = SECKEY_CopyPrivateKey( list_node->key );
+	if( !*private_key ) {
+		rv = PRIVLY_CRYPTO_LIBRARY_ERROR;
+		goto cleanup;
+	}
+	
+cleanup:
+	if( private_key_list ) {
+		SECKEY_DestroyPrivateKeyList( private_key_list );
+	}
+	if( slot ) {
+		PK11_FreeSlot( slot );
+	}
+	
+	return rv;
+}
+
+/* ---------------------------------------------------------------------------
+ * These CERT functions are lightly modified versions of functions of the
+ * same names from 'certutil.c' in the NSS distribution.
+ * -------------------------------------------------------------------------*/
+
+#if 0
+ 
+static certutilExtnList nullextnlist = {{PR_FALSE, NULL}};
+ 
+/**
+ * Creates a certificate request and outputs it to a file.
+ */
+static SECStatus
+CertReq( SECKEYPrivateKey *privk, SECKEYPublicKey *pubk, KeyType keyType,
+		 SECOidTag hashAlgTag, CERTName *subject, char *phone, int ascii,
+		 const char *emailAddrs, const char *dnsNames, certutilExtnList extnList,
+		 PRFileDesc *outFile )
+{
+    CERTSubjectPublicKeyInfo *spki;
+    CERTCertificateRequest *cr;
+    SECItem *encoding;
+    SECOidTag signAlgTag;
+    SECItem result;
+    SECStatus rv;
+    PRArenaPool *arena;
+    PRInt32 numBytes;
+    void *extHandle;
+
+    /* Create info about public key */
+    spki = SECKEY_CreateSubjectPublicKeyInfo(pubk);
+    if (!spki) {
+	SECU_PrintError(progName, "unable to create subject public key");
+	return SECFailure;
+    }
+    
+    /* Generate certificate request */
+    cr = CERT_CreateCertificateRequest(subject, spki, NULL);
+    SECKEY_DestroySubjectPublicKeyInfo(spki);
+    if (!cr) {
+	SECU_PrintError(progName, "unable to make certificate request");
+	return SECFailure;
+    }
+
+    arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
+    if ( !arena ) {
+	SECU_PrintError(progName, "out of memory");
+	return SECFailure;
+    }
+    
+    extHandle = CERT_StartCertificateRequestAttributes(cr);
+    if (extHandle == NULL) {
+        PORT_FreeArena (arena, PR_FALSE);
+	return SECFailure;
+    }
+    if (AddExtensions(extHandle, emailAddrs, dnsNames, extnList)
+                  != SECSuccess) {
+        PORT_FreeArena (arena, PR_FALSE);
+        return SECFailure;
+    }
+    CERT_FinishExtensions(extHandle);
+    CERT_FinishCertificateRequestAttributes(cr);
+
+    /* Der encode the request */
+    encoding = SEC_ASN1EncodeItem(arena, NULL, cr,
+                                  SEC_ASN1_GET(CERT_CertificateRequestTemplate));
+    CERT_DestroyCertificateRequest(cr);
+    if (encoding == NULL) {
+	PORT_FreeArena (arena, PR_FALSE);
+	SECU_PrintError(progName, "der encoding of request failed");
+	return SECFailure;
+    }
+
+    /* Sign the request */
+    signAlgTag = SEC_GetSignatureAlgorithmOidTag(keyType, hashAlgTag);
+    if (signAlgTag == SEC_OID_UNKNOWN) {
+	PORT_FreeArena (arena, PR_FALSE);
+	SECU_PrintError(progName, "unknown Key or Hash type");
+	return SECFailure;
+    }
+    rv = SEC_DerSignData(arena, &result, encoding->data, encoding->len, 
+			 privk, signAlgTag);
+    if (rv) {
+	PORT_FreeArena (arena, PR_FALSE);
+	SECU_PrintError(progName, "signing of data failed");
+	return SECFailure;
+    }
+
+    /* Encode request in specified format */
+    if (ascii) {
+	char *obuf;
+	char *name, *email, *org, *state, *country;
+	SECItem *it;
+	int total;
+
+	it = &result;
+
+	obuf = BTOA_ConvertItemToAscii(it);
+	total = PL_strlen(obuf);
+
+	name = CERT_GetCommonName(subject);
+	if (!name) {
+	    name = PORT_Strdup("(not specified)");
+	}
+
+	if (!phone)
+	    phone = strdup("(not specified)");
+
+	email = CERT_GetCertEmailAddress(subject);
+	if (!email)
+	    email = PORT_Strdup("(not specified)");
+
+	org = CERT_GetOrgName(subject);
+	if (!org)
+	    org = PORT_Strdup("(not specified)");
+
+	state = CERT_GetStateName(subject);
+	if (!state)
+	    state = PORT_Strdup("(not specified)");
+
+	country = CERT_GetCountryName(subject);
+	if (!country)
+	    country = PORT_Strdup("(not specified)");
+
+	PR_fprintf(outFile, 
+	           "\nCertificate request generated by Netscape certutil\n");
+	PR_fprintf(outFile, "Phone: %s\n\n", phone);
+	PR_fprintf(outFile, "Common Name: %s\n", name);
+	PR_fprintf(outFile, "Email: %s\n", email);
+	PR_fprintf(outFile, "Organization: %s\n", org);
+	PR_fprintf(outFile, "State: %s\n", state);
+	PR_fprintf(outFile, "Country: %s\n\n", country);
+
+	PORT_Free(name);
+	PORT_Free(email);
+	PORT_Free(org);
+	PORT_Free(state);
+	PORT_Free(country);
+
+	PR_fprintf(outFile, "%s\n", NS_CERTREQ_HEADER);
+	numBytes = PR_Write(outFile, obuf, total);
+	PORT_Free(obuf);
+	if (numBytes != total) {
+	    PORT_FreeArena (arena, PR_FALSE);
+	    SECU_PrintError(progName, "write error");
+	    return SECFailure;
+	}
+	PR_fprintf(outFile, "\n%s\n", NS_CERTREQ_TRAILER);
+    } else {
+	numBytes = PR_Write(outFile, result.data, result.len);
+	if (numBytes != (int)result.len) {
+	    PORT_FreeArena (arena, PR_FALSE);
+	    SECU_PrintSystemError(progName, "write error");
+	    return SECFailure;
+	}
+    }
+    PORT_FreeArena (arena, PR_FALSE);
+    return SECSuccess;
+}
+ 
+static CERTCertificate*
+MakeV1Cert(	CERTCertDBHandle* handle, CERTCertificateRequest* req,
+	    	char const* issuerNickName, PRBool selfsign, unsigned int serialNumber,
+			int warpmonths, int validityMonths )
+{
+    CERTCertificate* issuerCert = NULL;
+    CERTValidity* validity;
+    CERTCertificate* cert = NULL;
+    PRExplodedTime printableTime;
+    PRTime now, after;
+
+    if( !selfsign ) {
+		issuerCert = CERT_FindCertByNicknameOrEmailAddr( handle, issuerNickName );
+		if( !issuerCert ) {
+			return NULL;
+		}
+    }
+
+	/* Construct validity time range. */
+    now = PR_Now();
+    PR_ExplodeTime( now, PR_GMTParameters, &printableTime );
+    if( 0 != warpmonths ) {
+		printableTime.tm_month += warpmonths;
+		now = PR_ImplodeTime( &printableTime );
+		PR_ExplodeTime( now, PR_GMTParameters, &printableTime );
+    }
+    printableTime.tm_month += validityMonths;
+    after = PR_ImplodeTime( &printableTime );
+
+    /* note that the time is now in micro-second unit */
+    validity = CERT_CreateValidity( now, after );
+    if( validity ) {
+        cert = CERT_CreateCertificate( serialNumber, 
+									   (selfsign ? &req->subject : &issuerCert->subject), 
+									   validity, req );
+    
+        CERT_DestroyValidity( validity );
+    }
+    if( issuerCert ) {
+		CERT_DestroyCertificate (issuerCert);
+    }
+    
+    return cert;
+}
+
+static SECStatus
+CreateCert( CERTCertDBHandle* handle, PK11SlotInfo* slot, char const* issuerNickName, 
+			PRFileDesc* inFile, PRFileDesc* outFile, SECKEYPrivateKey** selfsignprivkey,
+			void* pwarg, SECOidTag hashAlgTag, unsigned int serialNumber, 
+			int warpmonths, int validityMonths, char const* emailAddrs,
+			char const* dnsNames, PRBool ascii, PRBool selfsign, certutilExtnList extnList )
+{
+    void *	extHandle;
+    SECItem *	certDER;
+    CERTCertificate *subjectCert 	= NULL;
+    CERTCertificateRequest *certReq	= NULL;
+    SECStatus 	rv 			= SECSuccess;
+    SECItem 	reqDER;
+    CERTCertExtension **CRexts;
+	SECStatus status = SECSuccess;
+
+    reqDER.data = NULL;
+    
+	/* Create a certrequest object from the input cert request der */
+	certReq = GetCertRequest(inFile, ascii);
+	if (certReq == NULL) {
+	    status = SECFailure)
+	}
+
+	subjectCert = MakeV1Cert (handle, certReq, issuerNickName, selfsign,
+				  serialNumber, warpmonths, validityMonths);
+	if (subjectCert == NULL) {
+	    GEN_BREAK (SECFailure)
+	}
+        
+        
+	extHandle = CERT_StartCertExtensions (subjectCert);
+	if (extHandle == NULL) {
+	    GEN_BREAK (SECFailure)
+	}
+        
+        rv = AddExtensions(extHandle, emailAddrs, dnsNames, extnList);
+        if (rv != SECSuccess) {
+	    GEN_BREAK (SECFailure)
+	}
+        
+        if (certReq->attributes != NULL &&
+	    certReq->attributes[0] != NULL &&
+	    certReq->attributes[0]->attrType.data != NULL &&
+	    certReq->attributes[0]->attrType.len   > 0    &&
+            SECOID_FindOIDTag(&certReq->attributes[0]->attrType)
+                == SEC_OID_PKCS9_EXTENSION_REQUEST) {
+            rv = CERT_GetCertificateRequestExtensions(certReq, &CRexts);
+            if (rv != SECSuccess)
+                break;
+            rv = CERT_MergeExtensions(extHandle, CRexts);
+            if (rv != SECSuccess)
+                break;
+        }
+
+	CERT_FinishExtensions(extHandle);
+
+	/* self-signing a cert request, find the private key */
+	if (selfsign && *selfsignprivkey == NULL) {
+	    *selfsignprivkey = PK11_FindKeyByDERCert(slot, subjectCert, pwarg);
+	    if (!*selfsignprivkey) {
+		fprintf(stderr, "Failed to locate private key.\n");
+		rv = SECFailure;
+		break;
+	    }
+	}
+
+	certDER = SignCert(handle, subjectCert, selfsign, hashAlgTag,
+	                   *selfsignprivkey, issuerNickName,pwarg);
+
+	if (certDER) {
+	   if (ascii) {
+		PR_fprintf(outFile, "%s\n%s\n%s\n", NS_CERT_HEADER, 
+		           BTOA_DataToAscii(certDER->data, certDER->len), 
+			   NS_CERT_TRAILER);
+	   } else {
+		PR_Write(outFile, certDER->data, certDER->len);
+	   }
+	}
+
+    } while (0);
+	
+cleanup:
+    CERT_DestroyCertificateRequest( certReq );
+    CERT_DestroyCertificate( subjectCert );
+    if( SECSuccess != rv ) {
+		PRErrorCode  perr = PR_GetError();
+			fprintf(stderr, "%s: unable to create cert (%s)\n", progName,
+				   SECU_Strerror(perr));
+    }
+	
+    return rv;
+}
+
+#endif
 
 /* -------------------------------------------------------------------------*/
 
@@ -1007,3 +1378,80 @@ privly_ForgetPostKey( void* session, privly_postid_t post_id )
 	Session_ForgetPostData( typed_session, post_id );
 	return PRIVLY_CRYPTO_SUCCESS;
 }
+
+/* -------------------------------------------------------------------------*/
+
+int PRIVLY_EXPORT
+privly_GenerateKeyPair( void* session, char const* nickname, int const key_bits )
+{
+	int rv = PRIVLY_CRYPTO_SUCCESS;
+	SECStatus status = SECSuccess;
+	SECKEYPrivateKey* private_key = NULL;
+	SECKEYPublicKey* public_key = NULL;
+	PK11SlotInfo* slot = NULL;
+	PK11RSAGenParams rsa_params;
+	
+	/* 2048 is our minimum value; 8192 is NSS's maximum value. */
+	if( key_bits != 2048 && key_bits != 4096 && key_bits != 8192 ) {
+		rv = PRIVLY_CRYPTO_BAD_PARAM;
+		goto cleanup;
+	}
+	
+	rv = get_private_key( session, nickname, &private_key );
+	if( PRIVLY_CRYPTO_SUCCESS != rv ) {
+		goto cleanup;
+	}
+	else if( private_key ) {
+		/* Key exists. */
+		rv = PRIVLY_CRYPTO_DUPLICATE_KEYPAIR;
+		goto cleanup;
+	}
+	
+	slot = PK11_GetInternalKeySlot(); /* TODO: GetBestSlot() */
+	if( !slot ) {
+		rv = PRIVLY_CRYPTO_LIBRARY_ERROR;
+		goto cleanup;
+	}
+	
+	/* Key generation parameters. */
+	rsa_params.keySizeInBits = key_bits;
+	rsa_params.pe = privly_RSA_KEYGEN_PE;
+	
+	/* PR_TRUE's = key isPerm and isSensitive;
+	Keys will be stored in the NSS database. */
+	private_key = PK11_GenerateKeyPair( slot, CKM_RSA_PKCS_KEY_PAIR_GEN,
+										&rsa_params, &public_key,
+										PR_TRUE, PR_TRUE, session );
+	if( !private_key ) {
+		rv = PRIVLY_CRYPTO_LIBRARY_ERROR;
+		goto cleanup;
+	}
+	
+	status = PK11_SetPrivateKeyNickname( private_key, nickname );
+	if( SECSuccess != status ) {
+		/* TODO: We probably want to delete the key if setting the nickname fails. */
+		rv = PRIVLY_CRYPTO_LIBRARY_ERROR;
+		goto cleanup;
+	}
+	
+cleanup:
+	if( slot ) {
+		PK11_FreeSlot( slot );
+	}
+	if( public_key ) {
+		SECKEY_DestroyPublicKey( public_key );
+	}
+	if( private_key ) {
+		SECKEY_DestroyPrivateKey( private_key );
+	}
+	
+	return rv;
+}
+
+/* ---------------------------------------------------------------------------
+ * Macro cleanup
+ * -------------------------------------------------------------------------*/
+
+#undef privly_HASH_ALGORITHM
+#undef privly_HASH_LENGTH
+#undef privly_RSA_KEYGEN_PE

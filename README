@@ -1,1 +1,15 @@
 This repository is home to https://priv.ly cryptography library. The project is currently under active development.
+
+1. Prerequisites
+
+2. Build
+
+	The Privly crypto library uses SCons (http://www.scons.org/) as its build system.
+	
+	To build the library, execute 'scons' from the root directory.
+	
+3. Testing
+
+4. Client usage
+
+	Client programs use the Privly cryptographic API by linking against the appropriate shared library.

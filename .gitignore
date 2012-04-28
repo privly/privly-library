@@ -1,0 +1,14 @@
+.sconsign.dblite
+
+# Ignore sandbox directory
+sandbox
+
+# Ignore everything under lib/
+lib/*
+# ... except the SConscript
+!lib/lib.scons
+
+# Ignore generated files under doc/coding
+doc/coding/*
+!doc/coding/*.tex
+
