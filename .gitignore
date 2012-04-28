@@ -1,5 +1,8 @@
 .sconsign.dblite
 
+# Ignore build/ directory (generated)
+build
+
 # Ignore sandbox directory
 sandbox
 
