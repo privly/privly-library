@@ -40,13 +40,13 @@ if env["PLATFORM"] == "win32":
 if env["PRIVLY_DEBUG"]:
 	if env["PLATFORM"] == "win32":
 		#	-Od		No optimizations
-		#	-MDd	C runtime library
-		ccflags += ["-Od", "-MDd"]
+		#	-MTd	Static C runtime library (otherwise we have to distribute msvcrXX.dll)
+		ccflags += ["-Od", "-MTd"]
 else: # Release build
 	if env["PLATFORM"] == "win32":
 		#	-O2		Speed optimizations
-		#	-MD		C runtime library
-		ccflags += ["-O2", "-MD"]
+		#	-MT		Static C runtime library (otherwise we have to distribute msvcrXX.dll)
+		ccflags += ["-O2", "-MT"]
 
 env.Append( CPPDEFINES = cppdefs + ["PRIVLY_NONCLIENT_BUILD"] )
 env.Append( CCFLAGS = ccflags )
