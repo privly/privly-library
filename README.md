@@ -1,7 +1,7 @@
 
 # Please Note
 
-[See this blog post](http://www.privly.org/content/chopping-block) regarding the current development of this library. No one is c
+[See this blog post](http://www.privly.org/content/chopping-block) regarding the current development of this library. No one is currently developing this library.
 
 To contribute to the compiled functionality, checkout the [NaCl branch](https://github.com/privly/privly-chrome/tree/nacl) of the Chrome extension.
 
