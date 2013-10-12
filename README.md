@@ -1,7 +1,9 @@
 
 # Please Note
 
-The [Chrome Extension](https://github.com/privly/privly-library) is currently the focus of Privly's compiled library development due to its more robust support for sandboxing compiled code. To contribute to the compiled functionality, checkout the "nacl" branch of the Chrome library.
+[See this blog post](http://www.privly.org/content/chopping-block) regarding the current development of this library. No one is c
+
+To contribute to the compiled functionality, checkout the [NaCl branch](https://github.com/privly/privly-chrome/tree/nacl) of the Chrome extension.
 
 For more information on what Privly is, see https://priv.ly.
 
